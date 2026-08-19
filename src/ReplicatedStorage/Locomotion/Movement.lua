@@ -633,6 +633,12 @@ function Movement.start(player: Player, cameraApi: CameraApi)
 	task.defer(Assets.unbindShiftLock)
 
 	local function onInputBegan(input: InputObject, _gameProcessed: boolean)
+		if input.KeyCode == Config.Keys.ShiftLock then
+			if camera then
+				camera.ToggleShiftLock()
+			end
+			return
+		end
 		if inputBlocked() then
 			return
 		end

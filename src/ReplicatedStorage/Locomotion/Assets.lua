@@ -4,6 +4,8 @@ local UserInputService = game:GetService("UserInputService")
 local ContextActionService = game:GetService("ContextActionService")
 
 local Assets = {}
+local cursorRoot: Frame? = nil
+local shiftLockEnabled = true
 
 function Assets.unbindShiftLock()
 	for _, name in { "MouseLockSwitchAction", "MouseLockSwitch", "ShiftLockSwitch" } do
@@ -31,6 +33,8 @@ function Assets.mountCursor(player: Player)
 	root.Position = UDim2.fromScale(0.5, 0.5)
 	root.Size = UDim2.fromOffset(22, 22)
 	root.Parent = gui
+	cursorRoot = root
+	root.Visible = shiftLockEnabled
 
 	local ring = Instance.new("Frame")
 	ring.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -74,14 +78,25 @@ function Assets.mountCursor(player: Player)
 	scale.Parent = root
 	pcall(RunService.UnbindFromRenderStep, RunService, "SoulsCursor")
 	RunService:BindToRenderStep("SoulsCursor", Enum.RenderPriority.Last.Value, function()
-		UserInputService.MouseIconEnabled = false
+		UserInputService.MouseIconEnabled = not shiftLockEnabled
+		if cursorRoot then
+			cursorRoot.Visible = shiftLockEnabled
+		end
 		scale.Scale = 1 + 0.03 * math.sin(os.clock() * 3.1)
 	end)
 end
 
+function Assets.setShiftLock(enabled: boolean)
+	shiftLockEnabled = enabled
+	if cursorRoot then
+		cursorRoot.Visible = enabled
+	end
+	UserInputService.MouseIconEnabled = not enabled
+end
+
 function Assets.boot(player: Player)
 	Assets.unbindShiftLock()
-	UserInputService.MouseIconEnabled = false
+	Assets.setShiftLock(true)
 	Assets.mountCursor(player)
 end
 
@@ -113,9 +128,9 @@ local function feetDust(hrp: BasePart): ParticleEmitter
 	pe.Rotation = NumberRange.new(0, 360)
 	pe.RotSpeed = NumberRange.new(-40, 40)
 	pe.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.28),
-		NumberSequenceKeypoint.new(0.35, 0.55),
-		NumberSequenceKeypoint.new(1, 0.7),
+		NumberSequenceKeypoint.new(0, 0.65),
+		NumberSequenceKeypoint.new(0.35, 1.25),
+		NumberSequenceKeypoint.new(1, 1.8),
 	})
 	pe.Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.35),

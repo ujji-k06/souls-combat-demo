@@ -11,6 +11,7 @@ export type Api = {
 	GetLookFlat: () -> Vector3,
 	NotifyGait: (gait: string) -> (),
 	PunchFov: () -> (),
+	ToggleShiftLock: () -> (),
 }
 
 local RENDER_NAME = "LocomotionCamera"
@@ -27,6 +28,7 @@ local currentDist = cfg.Distance
 local targetDist = cfg.Distance
 local gait = "idle"
 local fovPunch = 0
+local shiftLockEnabled = true
 local character: Model? = nil
 local root: BasePart? = nil
 local rayParams = RaycastParams.new()
@@ -71,14 +73,16 @@ local function onRenderStep(dt: number)
 	end
 
 	cam.CameraType = Enum.CameraType.Scriptable
-	UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-	UserInputService.MouseIconEnabled = false
+	UserInputService.MouseBehavior = if shiftLockEnabled
+		then Enum.MouseBehavior.LockCenter
+		else Enum.MouseBehavior.Default
+	UserInputService.MouseIconEnabled = not shiftLockEnabled
 
 	local delta = UserInputService:GetMouseDelta()
-	if delta.Magnitude > MOUSE_EPS then
+	if shiftLockEnabled and delta.Magnitude > MOUSE_EPS then
 		yaw -= delta.X * cfg.Sensitivity
 		pitch -= delta.Y * cfg.Sensitivity
-	else
+	elseif shiftLockEnabled then
 		gamepadLook(dt)
 	end
 
@@ -162,6 +166,11 @@ end
 
 function Camera.PunchFov()
 	fovPunch += cfg.DashFovPunch
+end
+
+function Camera.ToggleShiftLock()
+	shiftLockEnabled = not shiftLockEnabled
+	Assets.setShiftLock(shiftLockEnabled)
 end
 
 -- ponytail: lock-on not implemented
