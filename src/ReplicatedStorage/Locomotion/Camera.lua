@@ -9,6 +9,7 @@ export type Api = {
 	start: (player: Player) -> (),
 	GetYaw: () -> number,
 	GetLookFlat: () -> Vector3,
+	IsShiftLockEnabled: () -> boolean,
 	NotifyGait: (gait: string) -> (),
 	PunchFov: () -> (),
 	ToggleShiftLock: () -> (),
@@ -26,6 +27,7 @@ local pivotVel = Vector3.zero
 local pivotReady = false
 local currentDist = cfg.Distance
 local targetDist = cfg.Distance
+local currentShoulder = cfg.Shoulder
 local gait = "idle"
 local fovPunch = 0
 local shiftLockEnabled = true
@@ -43,6 +45,7 @@ local function refreshCharacter(char: Model)
 	pitch = 0
 	pivotReady = false
 	pivotVel = Vector3.zero
+	currentShoulder = if shiftLockEnabled then cfg.Shoulder else 0
 	rayParams.FilterDescendantsInstances = { char }
 end
 
@@ -75,14 +78,17 @@ local function onRenderStep(dt: number)
 	cam.CameraType = Enum.CameraType.Scriptable
 	UserInputService.MouseBehavior = if shiftLockEnabled
 		then Enum.MouseBehavior.LockCenter
-		else Enum.MouseBehavior.Default
+		elseif UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+			then Enum.MouseBehavior.LockCurrentPosition
+			else Enum.MouseBehavior.Default
 	UserInputService.MouseIconEnabled = not shiftLockEnabled
 
 	local delta = UserInputService:GetMouseDelta()
-	if shiftLockEnabled and delta.Magnitude > MOUSE_EPS then
+	local freeLook = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+	if (shiftLockEnabled or freeLook) and delta.Magnitude > MOUSE_EPS then
 		yaw -= delta.X * cfg.Sensitivity
 		pitch -= delta.Y * cfg.Sensitivity
-	elseif shiftLockEnabled then
+	elseif shiftLockEnabled or UserInputService.GamepadEnabled then
 		gamepadLook(dt)
 	end
 
@@ -90,20 +96,33 @@ local function onRenderStep(dt: number)
 
 	local height = if gait == "crouch" then cfg.CrouchHeight else cfg.Height
 	local desiredPivot = root.Position + Vector3.yAxis * height
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local airborne = humanoid ~= nil and humanoid.FloorMaterial == Enum.Material.Air
 	if not pivotReady then
 		pivot = desiredPivot
 		pivotVel = Vector3.zero
 		pivotReady = true
 	else
 		local omega = cfg.SpringFreq
-		local zeta = cfg.SpringDamp
-		local accel = -2 * zeta * omega * pivotVel - omega * omega * (pivot - desiredPivot)
+		local damping = Vector3.new(
+			cfg.SpringDampX,
+			if airborne then cfg.AirDampY else cfg.SpringDampY,
+			cfg.SpringDampZ
+		)
+		local dampedVelocity = Vector3.new(
+			pivotVel.X * damping.X,
+			pivotVel.Y * damping.Y,
+			pivotVel.Z * damping.Z
+		)
+		local accel = -2 * omega * dampedVelocity - omega * omega * (pivot - desiredPivot)
 		pivotVel += accel * dt
 		pivot += pivotVel * dt
 	end
 
 	local rot = CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)
-	local lookTarget = pivot + rot * Vector3.new(cfg.Shoulder, 0, 0)
+	local targetShoulder = if shiftLockEnabled then cfg.Shoulder else 0
+	currentShoulder += (targetShoulder - currentShoulder) * (1 - math.exp(-cfg.ShoulderLerp * dt))
+	local lookTarget = pivot + rot * Vector3.new(currentShoulder, 0, 0)
 	cam.Focus = CFrame.new(lookTarget)
 
 	local desiredOffset = rot * Vector3.new(0, 0, targetDist)
@@ -160,6 +179,10 @@ function Camera.GetLookFlat(): Vector3
 	return flat.Unit
 end
 
+function Camera.IsShiftLockEnabled(): boolean
+	return shiftLockEnabled
+end
+
 function Camera.NotifyGait(newGait: string)
 	gait = newGait
 end
@@ -171,6 +194,10 @@ end
 function Camera.ToggleShiftLock()
 	shiftLockEnabled = not shiftLockEnabled
 	Assets.setShiftLock(shiftLockEnabled)
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid.AutoRotate = not shiftLockEnabled
+	end
 end
 
 -- ponytail: lock-on not implemented

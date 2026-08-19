@@ -105,7 +105,7 @@ local function feetDust(hrp: BasePart): ParticleEmitter
 	if not att then
 		att = Instance.new("Attachment")
 		att.Name = "DustAttachment"
-		att.Position = Vector3.new(0, -3, 0)
+		att.Position = Vector3.new(0, -2.7, 0)
 		att.Parent = hrp
 	end
 	local pe = att:FindFirstChild("DashDust") :: ParticleEmitter?
@@ -116,39 +116,43 @@ local function feetDust(hrp: BasePart): ParticleEmitter
 	pe.Name = "DashDust"
 	pe.Texture = "rbxasset://textures/particles/smoke_main.dds"
 	pe.Enabled = false
-	pe.LockedToPart = true
+	pe.LockedToPart = false
 	pe.LightEmission = 0
 	pe.LightInfluence = 1
-	pe.Rate = 28
-	pe.Lifetime = NumberRange.new(0.22, 0.4)
-	pe.Speed = NumberRange.new(0.4, 1.6)
-	pe.SpreadAngle = Vector2.new(80, 25)
-	pe.Acceleration = Vector3.new(0, 1.5, 0)
-	pe.Drag = 4
+	pe.Rate = 80
+	pe.Lifetime = NumberRange.new(0.36, 0.7)
+	pe.Speed = NumberRange.new(0.4, 1.1)
+	pe.SpreadAngle = Vector2.new(35, 15)
+	pe.Acceleration = Vector3.new(0, 0.8, 0)
+	pe.Drag = 3
 	pe.Rotation = NumberRange.new(0, 360)
 	pe.RotSpeed = NumberRange.new(-40, 40)
 	pe.Size = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.65),
-		NumberSequenceKeypoint.new(0.35, 1.25),
-		NumberSequenceKeypoint.new(1, 1.8),
+		NumberSequenceKeypoint.new(0, 2.2),
+		NumberSequenceKeypoint.new(0.4, 1.1),
+		NumberSequenceKeypoint.new(1, 0.35),
 	})
 	pe.Transparency = NumberSequence.new({
-		NumberSequenceKeypoint.new(0, 0.35),
-		NumberSequenceKeypoint.new(0.45, 0.7),
+		NumberSequenceKeypoint.new(0, 0.1),
+		NumberSequenceKeypoint.new(0.45, 0.55),
 		NumberSequenceKeypoint.new(1, 1),
 	})
 	pe.Color = ColorSequence.new(Color3.fromRGB(92, 80, 64), Color3.fromRGB(58, 50, 40))
 	pe.EmissionDirection = Enum.NormalId.Top
-	pe.VelocityInheritance = 0.25
+	pe.VelocityInheritance = 1
 	pe.Parent = att
 	return pe
 end
 
-function Assets.setDashDust(hrp: BasePart, _dashDir: Vector3, on: boolean)
+function Assets.setDashDust(hrp: BasePart, dashDir: Vector3, on: boolean)
 	local pe = feetDust(hrp)
+	local att = pe.Parent :: Attachment
+	if dashDir.Magnitude > 0.01 then
+		att.CFrame = CFrame.lookAt(att.Position, att.Position - dashDir.Unit)
+	end
 	pe.Enabled = on
 	if on then
-		pe:Emit(6)
+		pe:Emit(12)
 	end
 end
 

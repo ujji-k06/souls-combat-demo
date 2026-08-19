@@ -3,8 +3,6 @@
 
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local AnimationClipProvider = game:GetService("AnimationClipProvider")
 
 local Config = require(script.Parent.Config)
 local Assets = require(script.Parent.Assets)
@@ -19,6 +17,7 @@ export type State = {
 export type CameraApi = {
 	GetYaw: () -> number,
 	GetLookFlat: () -> Vector3,
+	IsShiftLockEnabled: () -> boolean,
 	NotifyGait: (gait: string) -> (),
 	PunchFov: () -> (),
 }
@@ -26,15 +25,14 @@ export type CameraApi = {
 type Tracks = {
 	idle: AnimationTrack?,
 	walk: AnimationTrack?,
-	run: AnimationTrack?,
 	jump: AnimationTrack?,
 	fall: AnimationTrack?,
 	crouchIdle: AnimationTrack?,
 	crouchWalk: AnimationTrack?,
+	run2: AnimationTrack?,
+	run3: AnimationTrack?,
 	dashForward: AnimationTrack?,
 	dashBack: AnimationTrack?,
-	dashLeft: AnimationTrack?,
-	dashRight: AnimationTrack?,
 }
 
 local RENDER_NAME = "SoulsMovement"
@@ -73,12 +71,17 @@ local sprintHeld = false
 local isCrouching = false
 local isDashing = false
 local dashDir = Vector3.zero
+local dashBackward = false
+local dashSpeed = 0
+local dashDuration = 0
 local dashStart = 0.0
 local dashCooldownEnd = 0.0
+local jumpCooldownEnd = 0.0
 local dashBufferedAt: number? = nil
 local dashQueued = false
 local dashConstraint: LinearVelocity? = nil
 local currentSpeed = 0
+local runStartedAt: number? = nil
 local lastMove = Vector3.new(0, 0, -1)
 
 local state: State = {
@@ -148,47 +151,6 @@ local function loadTrack(
 	return track
 end
 
-local clipHash: { [KeyframeSequence]: string } = {}
-
-local function presetClip(name: string): KeyframeSequence?
-	local presets = ReplicatedStorage:FindFirstChild("AnimationPresets")
-	local folder = presets and presets:FindFirstChild("Movement")
-	if not folder then
-		return nil
-	end
-	local clip = folder:FindFirstChild(name, true)
-	if clip and clip:IsA("KeyframeSequence") then
-		return clip
-	end
-	return nil
-end
-
-local function loadClip(
-	animator: Animator,
-	clip: KeyframeSequence?,
-	priority: Enum.AnimationPriority,
-	looped: boolean
-): AnimationTrack?
-	if not clip then
-		return nil
-	end
-	local hash = clipHash[clip]
-	if not hash then
-		local ok, registered = pcall(AnimationClipProvider.RegisterAnimationClip, AnimationClipProvider, clip)
-		if not ok or typeof(registered) ~= "string" or registered == "" then
-			return nil
-		end
-		hash = registered
-		clipHash[clip] = hash
-	end
-	local anim = Instance.new("Animation")
-	anim.AnimationId = hash
-	local track = animator:LoadAnimation(anim)
-	track.Priority = priority
-	track.Looped = looped
-	return track
-end
-
 local function dashSide(moveVector: Vector3): string
 	if moveVector.Magnitude < MOVE_DEADZONE then
 		return "forward"
@@ -248,8 +210,54 @@ local function notifyGait(gait: string)
 	end
 	currentGait = gait
 	state.gait = gait
+	if gait == "run" then
+		runStartedAt = tick()
+	else
+		runStartedAt = nil
+	end
 	if camera then
 		camera.NotifyGait(gait)
+	end
+end
+
+local function stopRunTracks(fade: number)
+	for _, track in { tracks.run2, tracks.run3 } do
+		stopTrack(track, fade)
+	end
+end
+
+local function playRunAnim()
+	local primary = tracks.run2 or tracks.run3
+	if not primary then
+		playLoco(tracks.walk, 0.12)
+		return
+	end
+
+	local isPlayingRun = currentLocoTrack == tracks.run2
+		or currentLocoTrack == tracks.run3
+	if not isPlayingRun then
+		stopTrack(currentLocoTrack, 0.12)
+		currentLocoTrack = primary
+	end
+
+	local elapsed = if runStartedAt then tick() - runStartedAt else 0
+	local blend = math.clamp(elapsed / Config.Animations.RunBlendTime, 0, 1)
+	local weight2 = 1 - blend
+	local weight3 = blend
+
+	for _, blendTrack in {
+		{ tracks.run2, weight2 },
+		{ tracks.run3, weight3 },
+	} do
+		local track = blendTrack[1]
+		local weight = blendTrack[2]
+		if track then
+			if not track.IsPlaying then
+				track:Play(0, 0, 1)
+			end
+			track:AdjustWeight(weight, Config.Animations.RunBlendFade)
+			track:AdjustSpeed(1)
+		end
 	end
 end
 
@@ -266,18 +274,21 @@ local function playGaitAnim(gait: string, moving: boolean)
 	if currentDashTrack and currentDashTrack.IsPlaying then
 		currentDashTrack:Stop(0.12)
 	end
+	if gait ~= "run" then
+		stopRunTracks(0.12)
+	end
 
 	if humanoid and humanoid.FloorMaterial == Enum.Material.Air then
 		return
 	end
 
 	if gait == "crouch" then
-		playLoco(if moving then (tracks.crouchWalk or tracks.walk) else (tracks.crouchIdle or tracks.idle), 0.12)
-	elseif gait == "run" then
-		playLoco(tracks.run or tracks.walk, 0.12)
+		playLoco(tracks.crouchWalk or tracks.walk, 0.12)
 		if currentLocoTrack then
-			currentLocoTrack:AdjustSpeed(1)
+			currentLocoTrack:AdjustSpeed(if moving then 1 else 0)
 		end
+	elseif gait == "run" then
+		playRunAnim()
 	elseif gait == "walk" then
 		playLoco(tracks.walk, 0.12)
 		if currentLocoTrack then
@@ -355,16 +366,16 @@ local function startDash()
 		return
 	end
 
+	local side = dashSide(moveVector)
 	dashDir = dir.Unit
+	dashBackward = side == "back"
+	local sideways = side == "left" or side == "right"
+	dashSpeed = if sideways then Config.Movement.SideDashSpeed else Config.Movement.DashSpeed
+	dashDuration = if sideways then Config.Movement.SideDashTime else Config.Movement.DashTime
 	dashStart = tick()
 	dashCooldownEnd = dashStart + Config.Movement.DashCooldown
 	isDashing = true
-	local side = dashSide(moveVector)
-	currentDashTrack = if side == "left"
-		then tracks.dashLeft
-		elseif side == "right" then tracks.dashRight
-		elseif side == "back" then tracks.dashBack
-		else tracks.dashForward
+	currentDashTrack = if side == "back" then tracks.dashBack else tracks.dashForward
 
 	humanoid.WalkSpeed = 0
 	notifyGait("dash")
@@ -385,7 +396,7 @@ local function startDash()
 	lv.ForceLimitsEnabled = true
 	lv.ForceLimitMode = Enum.ForceLimitMode.PerAxis
 	lv.MaxAxesForce = Vector3.new(Config.Movement.DashForce, 0, Config.Movement.DashForce)
-	lv.VectorVelocity = dashDir * Config.Movement.DashSpeed
+	lv.VectorVelocity = dashDir * dashSpeed
 	lv.Parent = hrp
 	dashConstraint = lv
 
@@ -451,17 +462,22 @@ local function onRender(dt: number)
 	local moveVector = controls:GetMoveVector()
 	state.moveVector = moveVector
 	sprintHeld = sprintDown()
-	if sprintHeld then
-		isCrouching = false
+	if camera then
+		humanoid.AutoRotate = not camera.IsShiftLockEnabled()
+	end
+	if tick() < jumpCooldownEnd then
+		humanoid.Jump = false
+	elseif humanoid.Jump then
+		jumpCooldownEnd = tick() + Config.Movement.JumpCooldown
 	end
 
 	if isDashing then
 		local elapsed = tick() - dashStart
-		local t = elapsed / Config.Movement.DashTime
+		local t = elapsed / dashDuration
 		if t >= 1 then
 			endDash()
 		else
-			local speed = Config.Movement.DashSpeed * (1 - t) ^ 0.65
+			local speed = dashSpeed * (1 - t) ^ 0.65
 			if dashConstraint then
 				dashConstraint.VectorVelocity = dashDir * speed
 			end
@@ -472,7 +488,9 @@ local function onRender(dt: number)
 			state.invulnerable = invuln
 			humanoid:Move(Vector3.zero, true)
 			humanoid.Jump = false
-			setHumanoidYaw(hrp, yawFromDirection(dashDir), dt)
+			if not dashBackward then
+				setHumanoidYaw(hrp, yawFromDirection(dashDir), dt)
+			end
 			playGaitAnim("dash", true)
 			state.canAct = false
 			tryConsumeDashBuffer()
@@ -509,7 +527,7 @@ local function onRender(dt: number)
 	else
 		humanoid:Move(Vector3.zero, true)
 	end
-	if camera then
+	if camera and camera.IsShiftLockEnabled() then
 		setHumanoidYaw(hrp, camera.GetYaw(), dt)
 	end
 
@@ -562,26 +580,27 @@ local function setupAnimations(char: Model, h: Humanoid)
 		playing:Stop(0)
 	end
 
-	local walkTrack = loadClip(anim, presetClip(animCfg.WalkClip), Enum.AnimationPriority.Movement, true)
+	local walkTrack = loadTrack(anim, animCfg.Walk, Enum.AnimationPriority.Movement, true)
 		or loadTrack(anim, resolveAnimId("Walk", 0, animate), Enum.AnimationPriority.Movement, true)
-	local runTrack = loadClip(anim, presetClip(animCfg.RunClip), Enum.AnimationPriority.Movement, true) or walkTrack
+	local run2Track = loadTrack(anim, animCfg.Run2, Enum.AnimationPriority.Movement, true)
+	local run3Track = loadTrack(anim, animCfg.Run3, Enum.AnimationPriority.Movement, true)
 	tracks = {
 		idle = loadTrack(anim, ids.idle, Enum.AnimationPriority.Idle, true),
 		walk = walkTrack,
-		run = runTrack,
+		run2 = run2Track,
+		run3 = run3Track,
 		jump = loadTrack(anim, ids.jump, Enum.AnimationPriority.Movement, false),
 		fall = loadTrack(anim, ids.fall, Enum.AnimationPriority.Movement, true),
-		crouchIdle = loadClip(anim, presetClip(animCfg.CrouchIdleClip), Enum.AnimationPriority.Idle, true),
-		crouchWalk = loadClip(anim, presetClip(animCfg.CrouchWalkClip), Enum.AnimationPriority.Movement, true),
+		crouchIdle = nil,
+		crouchWalk = loadTrack(anim, animCfg.Crouch, Enum.AnimationPriority.Movement, true),
 		dashForward = loadTrack(anim, animCfg.DashForward, Enum.AnimationPriority.Action2, false),
 		dashBack = loadTrack(anim, animCfg.DashBack, Enum.AnimationPriority.Action2, false),
-		dashLeft = loadTrack(anim, animCfg.DashLeft, Enum.AnimationPriority.Action2, false),
-		dashRight = loadTrack(anim, animCfg.DashRight, Enum.AnimationPriority.Action2, false),
 	}
 
 	currentLocoTrack = nil
 	currentDashTrack = nil
 	airTrack = nil
+	runStartedAt = nil
 end
 
 local function onCharacterAdded(char: Model)
@@ -596,6 +615,7 @@ local function onCharacterAdded(char: Model)
 	dashQueued = false
 	dashBufferedAt = nil
 	dashCooldownEnd = 0
+	jumpCooldownEnd = 0
 	currentGait = "idle"
 	state.gait = "idle"
 	state.invulnerable = false
@@ -645,13 +665,22 @@ function Movement.start(player: Player, cameraApi: CameraApi)
 		local key = input.KeyCode
 		local keys = Config.Keys
 		if key == keys.Crouch or key == keys.GamepadCrouch then
-			isCrouching = not isCrouching
+			isCrouching = true
 		elseif key == keys.Dash or key == keys.GamepadDash then
 			requestDash()
 		end
 	end
 
+	local function onInputEnded(input: InputObject, _gameProcessed: boolean)
+		local key = input.KeyCode
+		local keys = Config.Keys
+		if key == keys.Crouch or key == keys.GamepadCrouch then
+			isCrouching = false
+		end
+	end
+
 	UserInputService.InputBegan:Connect(onInputBegan)
+	UserInputService.InputEnded:Connect(onInputEnded)
 
 	player.CharacterAdded:Connect(onCharacterAdded)
 	if player.Character then
