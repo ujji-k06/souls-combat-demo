@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <radialGradient id="p0" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="45%" stop-color="#d9d0c4" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="p1" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#efe6d8" stop-opacity="0.7"/>
+      <stop offset="55%" stop-color="#c4b49a" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="p2" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d8cbb8" stop-opacity="0.4"/>
+      <stop offset="60%" stop-color="#a89880" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="p3" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#c2b39d" stop-opacity="0.18"/>
+      <stop offset="70%" stop-color="#8a7b66" stop-opacity="0.06"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- 2x2 one-shot: compact grit -> lift -> break apart -> fade -->
+  <g transform="translate(0,0)">
+    <ellipse cx="64" cy="70" rx="22" ry="16" fill="url(#p0)"/>
+    <ellipse cx="52" cy="62" rx="10" ry="8" fill="url(#p0)" opacity="0.7"/>
+    <ellipse cx="76" cy="64" rx="9" ry="7" fill="url(#p0)" opacity="0.55"/>
+  </g>
+  <g transform="translate(128,0)">
+    <ellipse cx="64" cy="62" rx="30" ry="20" fill="url(#p1)"/>
+    <ellipse cx="44" cy="54" rx="12" ry="9" fill="url(#p1)"/>
+    <ellipse cx="86" cy="58" rx="11" ry="8" fill="url(#p1)"/>
+    <ellipse cx="64" cy="48" rx="8" ry="6" fill="url(#p0)" opacity="0.4"/>
+  </g>
+  <g transform="translate(0,128)">
+    <ellipse cx="64" cy="58" rx="36" ry="22" fill="url(#p2)"/>
+    <ellipse cx="36" cy="50" rx="14" ry="10" fill="url(#p2)"/>
+    <ellipse cx="94" cy="46" rx="13" ry="9" fill="url(#p2)"/>
+    <ellipse cx="58" cy="38" rx="10" ry="7" fill="url(#p2)"/>
+  </g>
+  <g transform="translate(128,128)">
+    <ellipse cx="64" cy="54" rx="42" ry="24" fill="url(#p3)"/>
+    <ellipse cx="28" cy="44" rx="12" ry="8" fill="url(#p3)"/>
+    <ellipse cx="102" cy="40" rx="11" ry="8" fill="url(#p3)"/>
+    <ellipse cx="70" cy="32" rx="9" ry="6" fill="url(#p3)"/>
+  </g>
+</svg>
