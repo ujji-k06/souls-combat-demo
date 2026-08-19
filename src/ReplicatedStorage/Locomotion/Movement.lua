@@ -35,6 +35,8 @@ type Tracks = {
 	dashBack: AnimationTrack?,
 }
 
+type DashSide = "forward" | "back" | "left" | "right"
+
 local RENDER_NAME = "SoulsMovement"
 local MOVE_DEADZONE = 0.12
 
@@ -75,12 +77,18 @@ local dashBackward = false
 local dashSpeed = 0
 local dashDuration = 0
 local dashStart = 0.0
-local dashCooldownEnd = 0.0
+local dashCooldownEnds: { [DashSide]: number } = {
+	forward = 0,
+	back = 0,
+	left = 0,
+	right = 0,
+}
 local jumpCooldownEnd = 0.0
 local dashBufferedAt: number? = nil
 local dashQueued = false
 local dashConstraint: LinearVelocity? = nil
 local currentSpeed = 0
+local sprintMomentum = false
 local runStartedAt: number? = nil
 local lastMove = Vector3.new(0, 0, -1)
 
@@ -151,7 +159,7 @@ local function loadTrack(
 	return track
 end
 
-local function dashSide(moveVector: Vector3): string
+local function dashSide(moveVector: Vector3): DashSide
 	if moveVector.Magnitude < MOVE_DEADZONE then
 		return "forward"
 	end
@@ -165,6 +173,13 @@ local function stopTrack(track: AnimationTrack?, fade: number)
 	if track and track.IsPlaying then
 		track:Stop(fade)
 	end
+end
+
+local function syncTrackPhase(source: AnimationTrack, target: AnimationTrack)
+	if source.Length <= 0 or target.Length <= 0 then
+		return
+	end
+	target.TimePosition = (source.TimePosition / source.Length) * target.Length
 end
 
 local function playLoco(track: AnimationTrack?, fade: number)
@@ -233,30 +248,38 @@ local function playRunAnim()
 		return
 	end
 
-	local isPlayingRun = currentLocoTrack == tracks.run2
-		or currentLocoTrack == tracks.run3
+	local isPlayingRun = currentLocoTrack == tracks.run2 or currentLocoTrack == tracks.run3
 	if not isPlayingRun then
 		stopTrack(currentLocoTrack, 0.12)
 		currentLocoTrack = primary
 	end
 
 	local elapsed = if runStartedAt then tick() - runStartedAt else 0
-	local blend = math.clamp(elapsed / Config.Animations.RunBlendTime, 0, 1)
-	local weight2 = 1 - blend
-	local weight3 = blend
+	local blend = math.clamp((elapsed - Config.Movement.RunRampTime) / Config.Animations.RunBlendTime, 0, 1)
+	local weight2 = if tracks.run2 then 1 - blend else 0
+	local weight3 = if tracks.run3 then (if tracks.run2 then blend else 1) else 0
 
-	for _, blendTrack in {
-		{ tracks.run2, weight2 },
-		{ tracks.run3, weight3 },
-	} do
+	for _, blendTrack in
+		{
+			{ tracks.run2, weight2 },
+			{ tracks.run3, weight3 },
+		}
+	do
 		local track = blendTrack[1]
 		local weight = blendTrack[2]
 		if track then
-			if not track.IsPlaying then
-				track:Play(0, 0, 1)
+			if weight <= 0 then
+				stopTrack(track, 0)
+			else
+				if not track.IsPlaying then
+					track:Play(0, 0, 1)
+					if track == tracks.run3 and tracks.run2 then
+						syncTrackPhase(tracks.run2, track)
+					end
+				end
+				track:AdjustWeight(weight, Config.Animations.RunBlendFade)
+				track:AdjustSpeed(1)
 			end
-			track:AdjustWeight(weight, Config.Animations.RunBlendFade)
-			track:AdjustSpeed(1)
 		end
 	end
 end
@@ -345,17 +368,20 @@ local function endDash()
 	end
 end
 
-local function startDash()
+local function startDash(): boolean
 	if not humanoid or not hrp or not character or not camera then
-		return
+		return false
 	end
-	if isDashing or humanoid.FloorMaterial == Enum.Material.Air or tick() < dashCooldownEnd then
-		return
+	if isDashing or humanoid.FloorMaterial == Enum.Material.Air then
+		return false
 	end
-	dashQueued = false
-	dashBufferedAt = nil
 
 	local moveVector = controls:GetMoveVector()
+	local side = dashSide(moveVector)
+	if tick() < dashCooldownEnds[side] then
+		return false
+	end
+
 	local dir: Vector3
 	if moveVector.Magnitude > MOVE_DEADZONE then
 		dir = cameraRelativeDir(moveVector)
@@ -363,17 +389,18 @@ local function startDash()
 		dir = camera.GetLookFlat()
 	end
 	if dir.Magnitude < 0.01 then
-		return
+		return false
 	end
 
-	local side = dashSide(moveVector)
+	dashQueued = false
+	dashBufferedAt = nil
 	dashDir = dir.Unit
 	dashBackward = side == "back"
 	local sideways = side == "left" or side == "right"
 	dashSpeed = if sideways then Config.Movement.SideDashSpeed else Config.Movement.DashSpeed
 	dashDuration = if sideways then Config.Movement.SideDashTime else Config.Movement.DashTime
 	dashStart = tick()
-	dashCooldownEnd = dashStart + Config.Movement.DashCooldown
+	dashCooldownEnds[side] = dashStart + Config.Movement.DashCooldown
 	isDashing = true
 	currentDashTrack = if side == "back" then tracks.dashBack else tracks.dashForward
 
@@ -403,6 +430,7 @@ local function startDash()
 	currentSpeed = 0
 	Assets.setDashDust(hrp, dashDir, true)
 	playGaitAnim("dash", true)
+	return true
 end
 
 local function requestDash()
@@ -414,7 +442,8 @@ local function requestDash()
 		dashQueued = true
 		return
 	end
-	if now < dashCooldownEnd then
+	local side = dashSide(controls:GetMoveVector())
+	if now < dashCooldownEnds[side] then
 		dashBufferedAt = now
 		return
 	end
@@ -422,17 +451,28 @@ local function requestDash()
 end
 
 local function tryConsumeDashBuffer()
-	if isDashing or tick() < dashCooldownEnd then
+	if isDashing then
+		return
+	end
+	local now = tick()
+	local side = dashSide(controls:GetMoveVector())
+	if now < dashCooldownEnds[side] then
 		return
 	end
 	if dashQueued then
-		dashQueued = false
-		startDash()
+		if startDash() then
+			dashQueued = false
+		end
 		return
 	end
-	if dashBufferedAt and tick() - dashBufferedAt <= Config.Movement.InputBuffer then
-		dashBufferedAt = nil
-		startDash()
+	if dashBufferedAt then
+		if now - dashBufferedAt <= Config.Movement.InputBuffer then
+			if startDash() then
+				dashBufferedAt = nil
+			end
+		else
+			dashBufferedAt = nil
+		end
 	else
 		dashBufferedAt = nil
 	end
@@ -462,6 +502,9 @@ local function onRender(dt: number)
 	local moveVector = controls:GetMoveVector()
 	state.moveVector = moveVector
 	sprintHeld = sprintDown()
+	if sprintHeld then
+		isCrouching = false
+	end
 	if camera then
 		humanoid.AutoRotate = not camera.IsShiftLockEnabled()
 	end
@@ -503,23 +546,41 @@ local function onRender(dt: number)
 		character:SetAttribute("Invulnerable", false)
 	end
 
+	local isSprinting = sprintHeld and moveVector.Magnitude > MOVE_DEADZONE
 	local targetSpeed = 0
 	if moveVector.Magnitude > MOVE_DEADZONE then
 		lastMove = moveVector
 		if isCrouching then
 			targetSpeed = Config.Movement.CrouchSpeed
-		elseif sprintHeld then
-			targetSpeed = Config.Movement.RunSpeed
+		elseif isSprinting then
+			local runProgress = if runStartedAt
+				then math.clamp((tick() - runStartedAt) / Config.Movement.RunRampTime, 0, 1)
+				else 0
+			targetSpeed = Config.Movement.WalkSpeed
+				+ (Config.Movement.RunSpeed - Config.Movement.WalkSpeed) * runProgress
 		else
 			targetSpeed = Config.Movement.WalkSpeed
 		end
 	end
-	local limit = (if currentSpeed < targetSpeed then Config.Movement.Accel else Config.Movement.Decel) * dt
-	local diff = targetSpeed - currentSpeed
-	if math.abs(diff) <= limit then
-		currentSpeed = targetSpeed
+
+	local speedRate = if isSprinting then Config.Movement.Accel elseif sprintMomentum then Config.Movement.Decel else 0
+	if isSprinting then
+		sprintMomentum = true
+	end
+	if speedRate > 0 then
+		local limit = speedRate * dt
+		local diff = targetSpeed - currentSpeed
+		if math.abs(diff) <= limit then
+			currentSpeed = targetSpeed
+		else
+			currentSpeed += if diff > 0 then limit else -limit
+		end
+		if sprintMomentum and not isSprinting and currentSpeed <= targetSpeed then
+			currentSpeed = targetSpeed
+			sprintMomentum = false
+		end
 	else
-		currentSpeed += if diff > 0 then limit else -limit
+		currentSpeed = targetSpeed
 	end
 	humanoid.WalkSpeed = currentSpeed
 	if currentSpeed > 0.35 then
@@ -612,9 +673,15 @@ local function onCharacterAdded(char: Model)
 	isCrouching = false
 	isDashing = false
 	currentSpeed = 0
+	sprintMomentum = false
 	dashQueued = false
 	dashBufferedAt = nil
-	dashCooldownEnd = 0
+	dashCooldownEnds = {
+		forward = 0,
+		back = 0,
+		left = 0,
+		right = 0,
+	}
 	jumpCooldownEnd = 0
 	currentGait = "idle"
 	state.gait = "idle"
@@ -665,7 +732,9 @@ function Movement.start(player: Player, cameraApi: CameraApi)
 		local key = input.KeyCode
 		local keys = Config.Keys
 		if key == keys.Crouch or key == keys.GamepadCrouch then
-			isCrouching = true
+			if not sprintDown() then
+				isCrouching = true
+			end
 		elseif key == keys.Dash or key == keys.GamepadDash then
 			requestDash()
 		end
