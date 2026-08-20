@@ -78,9 +78,10 @@ local function onRenderStep(dt: number)
 	cam.CameraType = Enum.CameraType.Scriptable
 	UserInputService.MouseBehavior = if shiftLockEnabled
 		then Enum.MouseBehavior.LockCenter
-		elseif UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
-			then Enum.MouseBehavior.LockCurrentPosition
-			else Enum.MouseBehavior.Default
+		elseif
+			UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+		then Enum.MouseBehavior.LockCurrentPosition
+		else Enum.MouseBehavior.Default
 	UserInputService.MouseIconEnabled = not shiftLockEnabled
 
 	local delta = UserInputService:GetMouseDelta()
@@ -103,20 +104,21 @@ local function onRenderStep(dt: number)
 		pivotVel = Vector3.zero
 		pivotReady = true
 	else
+		local look = Vector3.new(-math.sin(yaw), 0, -math.cos(yaw))
+		local right = Vector3.new(-look.Z, 0, look.X)
 		local omega = cfg.SpringFreq
-		local damping = Vector3.new(
-			cfg.SpringDampX,
-			if airborne then cfg.AirDampY else cfg.SpringDampY,
-			cfg.SpringDampZ
-		)
-		local dampedVelocity = Vector3.new(
-			pivotVel.X * damping.X,
-			pivotVel.Y * damping.Y,
-			pivotVel.Z * damping.Z
-		)
-		local accel = -2 * omega * dampedVelocity - omega * omega * (pivot - desiredPivot)
-		pivotVel += accel * dt
-		pivot += pivotVel * dt
+		local side, fwd = pivot:Dot(right), pivot:Dot(look)
+		local sideDes, fwdDes = desiredPivot:Dot(right), desiredPivot:Dot(look)
+		local sideVel, fwdVel = pivotVel:Dot(right), pivotVel:Dot(look)
+		local sideAcc = -2 * omega * cfg.SpringDampX * sideVel - omega * omega * (side - sideDes)
+		local fwdAcc = -2 * omega * cfg.SpringDampZ * fwdVel - omega * omega * (fwd - fwdDes)
+		sideVel += sideAcc * dt
+		fwdVel += fwdAcc * dt
+		local yRate = if airborne then cfg.AirDampY else cfg.PositionLag
+		pivot = right * (side + sideVel * dt)
+			+ look * (fwd + fwdVel * dt)
+			+ Vector3.yAxis * (pivot.Y + (desiredPivot.Y - pivot.Y) * (1 - math.exp(-yRate * dt)))
+		pivotVel = right * sideVel + look * fwdVel
 	end
 
 	local rot = CFrame.fromEulerAnglesYXZ(pitch, yaw, 0)

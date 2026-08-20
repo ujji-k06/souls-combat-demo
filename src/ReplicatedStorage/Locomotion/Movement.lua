@@ -30,7 +30,6 @@ type Tracks = {
 	crouchIdle: AnimationTrack?,
 	crouchWalk: AnimationTrack?,
 	run2: AnimationTrack?,
-	run3: AnimationTrack?,
 	dashForward: AnimationTrack?,
 	dashBack: AnimationTrack?,
 }
@@ -88,7 +87,6 @@ local dashBufferedAt: number? = nil
 local dashQueued = false
 local dashConstraint: LinearVelocity? = nil
 local currentSpeed = 0
-local sprintMomentum = false
 local runStartedAt: number? = nil
 local lastMove = Vector3.new(0, 0, -1)
 
@@ -175,13 +173,6 @@ local function stopTrack(track: AnimationTrack?, fade: number)
 	end
 end
 
-local function syncTrackPhase(source: AnimationTrack, target: AnimationTrack)
-	if source.Length <= 0 or target.Length <= 0 then
-		return
-	end
-	target.TimePosition = (source.TimePosition / source.Length) * target.Length
-end
-
 local function playLoco(track: AnimationTrack?, fade: number)
 	if currentLocoTrack == track then
 		return
@@ -235,61 +226,27 @@ local function notifyGait(gait: string)
 	end
 end
 
-local function stopRunTracks(fade: number)
-	for _, track in { tracks.run2, tracks.run3 } do
-		stopTrack(track, fade)
-	end
-end
-
 local function playRunAnim()
-	local primary = tracks.run2 or tracks.run3
-	if not primary then
-		playLoco(tracks.walk, 0.12)
+	if not tracks.run2 then
+		playLoco(tracks.walk, 0.2)
 		return
 	end
 
-	local isPlayingRun = currentLocoTrack == tracks.run2 or currentLocoTrack == tracks.run3
-	if not isPlayingRun then
-		stopTrack(currentLocoTrack, 0.12)
-		currentLocoTrack = primary
-	end
-
-	local elapsed = if runStartedAt then tick() - runStartedAt else 0
-	local blend = math.clamp((elapsed - Config.Movement.RunRampTime) / Config.Animations.RunBlendTime, 0, 1)
-	local weight2 = if tracks.run2 then 1 - blend else 0
-	local weight3 = if tracks.run3 then (if tracks.run2 then blend else 1) else 0
-
-	for _, blendTrack in
-		{
-			{ tracks.run2, weight2 },
-			{ tracks.run3, weight3 },
-		}
-	do
-		local track = blendTrack[1]
-		local weight = blendTrack[2]
-		if track then
-			if weight <= 0 then
-				stopTrack(track, 0)
-			else
-				if not track.IsPlaying then
-					track:Play(0, 0, 1)
-					if track == tracks.run3 and tracks.run2 then
-						syncTrackPhase(tracks.run2, track)
-					end
-				end
-				track:AdjustWeight(weight, Config.Animations.RunBlendFade)
-				track:AdjustSpeed(1)
-			end
-		end
-	end
+	playLoco(tracks.run2, 0.2)
+	tracks.run2:AdjustSpeed(math.clamp(currentSpeed / Config.Movement.RunSpeed, 0.74, 1.06))
 end
 
 local function playGaitAnim(gait: string, moving: boolean)
 	if isDashing then
-		if currentDashTrack and not currentDashTrack.IsPlaying then
-			stopTrack(currentLocoTrack, 0.12)
-			currentLocoTrack = nil
-			currentDashTrack:Play(0.06)
+		if currentDashTrack then
+			if not currentDashTrack.IsPlaying then
+				stopTrack(currentLocoTrack, 0.08)
+				currentLocoTrack = nil
+				currentDashTrack:Play(0.04)
+			end
+			if currentDashTrack.Length > 0.05 then
+				currentDashTrack:AdjustSpeed(currentDashTrack.Length / dashDuration)
+			end
 		end
 		return
 	end
@@ -298,7 +255,7 @@ local function playGaitAnim(gait: string, moving: boolean)
 		currentDashTrack:Stop(0.12)
 	end
 	if gait ~= "run" then
-		stopRunTracks(0.12)
+		stopTrack(tracks.run2, 0.12)
 	end
 
 	if humanoid and humanoid.FloorMaterial == Enum.Material.Air then
@@ -313,9 +270,9 @@ local function playGaitAnim(gait: string, moving: boolean)
 	elseif gait == "run" then
 		playRunAnim()
 	elseif gait == "walk" then
-		playLoco(tracks.walk, 0.12)
+		playLoco(tracks.walk, 0.2)
 		if currentLocoTrack then
-			currentLocoTrack:AdjustSpeed(1)
+			currentLocoTrack:AdjustSpeed(math.clamp(currentSpeed / Config.Movement.WalkSpeed, 0.85, 1.08))
 		end
 	else
 		playLoco(tracks.idle, 0.12)
@@ -360,9 +317,13 @@ local function endDash()
 	if character then
 		character:SetAttribute("Invulnerable", false)
 	end
-	stopTrack(currentDashTrack, 0.12)
+	stopTrack(currentDashTrack, 0.08)
 	currentDashTrack = nil
-	currentSpeed = Config.Movement.WalkSpeed * 0.55
+	if controls and controls:GetMoveVector().Magnitude > MOVE_DEADZONE then
+		currentSpeed = if sprintDown() then Config.Movement.RunSpeed else Config.Movement.WalkSpeed
+	else
+		currentSpeed = Config.Movement.WalkSpeed * 0.45
+	end
 	if hrp then
 		Assets.setDashDust(hrp, dashDir, false)
 	end
@@ -396,9 +357,8 @@ local function startDash(): boolean
 	dashBufferedAt = nil
 	dashDir = dir.Unit
 	dashBackward = side == "back"
-	local sideways = side == "left" or side == "right"
-	dashSpeed = if sideways then Config.Movement.SideDashSpeed else Config.Movement.DashSpeed
-	dashDuration = if sideways then Config.Movement.SideDashTime else Config.Movement.DashTime
+	dashSpeed = Config.Movement.DashSpeed
+	dashDuration = Config.Movement.DashTime
 	dashStart = tick()
 	dashCooldownEnds[side] = dashStart + Config.Movement.DashCooldown
 	isDashing = true
@@ -520,9 +480,26 @@ local function onRender(dt: number)
 		if t >= 1 then
 			endDash()
 		else
-			local speed = dashSpeed * (1 - t) ^ 0.65
+			local wish = cameraRelativeDir(moveVector)
+			if wish.Magnitude > MOVE_DEADZONE then
+				local flat = Vector3.new(wish.X, 0, wish.Z)
+				if flat.Magnitude > 0.01 then
+					local target = flat.Unit
+					local angle = math.acos(math.clamp(dashDir:Dot(target), -1, 1))
+					if angle > 1e-3 then
+						local maxTurn = math.rad(Config.Movement.DashSteer) * dt
+						dashDir = dashDir:Lerp(target, math.min(1, maxTurn / angle)).Unit
+					end
+				end
+			end
+			local hold = 0.75
+			local coast = math.clamp((t - hold) / (1 - hold), 0, 1)
+			local speed = dashSpeed * (1 - coast * coast)
 			if dashConstraint then
 				dashConstraint.VectorVelocity = dashDir * speed
+			end
+			if hrp then
+				Assets.stepDashDust(hrp, dashDir)
 			end
 			local invuln = elapsed >= Config.Movement.IFrameStart and elapsed <= Config.Movement.IFrameEnd
 			if character then
@@ -553,9 +530,10 @@ local function onRender(dt: number)
 		if isCrouching then
 			targetSpeed = Config.Movement.CrouchSpeed
 		elseif isSprinting then
-			local runProgress = if runStartedAt
+			local t = if runStartedAt
 				then math.clamp((tick() - runStartedAt) / Config.Movement.RunRampTime, 0, 1)
 				else 0
+			local runProgress = 1 - (1 - t) * (1 - t)
 			targetSpeed = Config.Movement.WalkSpeed
 				+ (Config.Movement.RunSpeed - Config.Movement.WalkSpeed) * runProgress
 		else
@@ -563,24 +541,13 @@ local function onRender(dt: number)
 		end
 	end
 
-	local speedRate = if isSprinting then Config.Movement.Accel elseif sprintMomentum then Config.Movement.Decel else 0
-	if isSprinting then
-		sprintMomentum = true
-	end
-	if speedRate > 0 then
-		local limit = speedRate * dt
-		local diff = targetSpeed - currentSpeed
-		if math.abs(diff) <= limit then
-			currentSpeed = targetSpeed
-		else
-			currentSpeed += if diff > 0 then limit else -limit
-		end
-		if sprintMomentum and not isSprinting and currentSpeed <= targetSpeed then
-			currentSpeed = targetSpeed
-			sprintMomentum = false
-		end
-	else
+	local speedRate = if targetSpeed >= currentSpeed then Config.Movement.Accel else Config.Movement.Decel
+	local limit = speedRate * dt
+	local diff = targetSpeed - currentSpeed
+	if math.abs(diff) <= limit then
 		currentSpeed = targetSpeed
+	else
+		currentSpeed += if diff > 0 then limit else -limit
 	end
 	humanoid.WalkSpeed = currentSpeed
 	if currentSpeed > 0.35 then
@@ -644,12 +611,10 @@ local function setupAnimations(char: Model, h: Humanoid)
 	local walkTrack = loadTrack(anim, animCfg.Walk, Enum.AnimationPriority.Movement, true)
 		or loadTrack(anim, resolveAnimId("Walk", 0, animate), Enum.AnimationPriority.Movement, true)
 	local run2Track = loadTrack(anim, animCfg.Run2, Enum.AnimationPriority.Movement, true)
-	local run3Track = loadTrack(anim, animCfg.Run3, Enum.AnimationPriority.Movement, true)
 	tracks = {
 		idle = loadTrack(anim, ids.idle, Enum.AnimationPriority.Idle, true),
 		walk = walkTrack,
 		run2 = run2Track,
-		run3 = run3Track,
 		jump = loadTrack(anim, ids.jump, Enum.AnimationPriority.Movement, false),
 		fall = loadTrack(anim, ids.fall, Enum.AnimationPriority.Movement, true),
 		crouchIdle = nil,
@@ -673,7 +638,6 @@ local function onCharacterAdded(char: Model)
 	isCrouching = false
 	isDashing = false
 	currentSpeed = 0
-	sprintMomentum = false
 	dashQueued = false
 	dashBufferedAt = nil
 	dashCooldownEnds = {
