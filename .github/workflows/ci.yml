@@ -1,0 +1,18 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Installs rojo/stylua/selene/wally at the versions pinned in rokit.toml
+      - uses: CompeyDev/setup-rokit@v0.2.1
+
+      - run: stylua --check .
+      - run: selene src
+      - run: rojo build -o place.rbxlx

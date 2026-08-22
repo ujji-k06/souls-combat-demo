@@ -598,9 +598,7 @@ local function setupAnimations(char: Model, h: Humanoid)
 	}
 
 	if animate then
-		if animate:IsA("LocalScript") then
-			animate.Disabled = true
-		elseif animate:IsA("Script") then
+		if animate:IsA("LocalScript") or animate:IsA("Script") then
 			animate.Disabled = true
 		end
 	end
