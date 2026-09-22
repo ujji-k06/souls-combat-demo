@@ -32,4 +32,5 @@ agent-transcripts/
 .DS_Store
 .env
 .env.*
+sourcemap.json
 !.env.example
